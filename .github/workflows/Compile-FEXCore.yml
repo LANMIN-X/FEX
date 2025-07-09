@@ -40,7 +40,7 @@ jobs:
           cp -r ./build/wow64/Bin/libwow64fex.dll ./FEXCore_WCP/system32
           wget https://github.com/TGP-17/wcp-template/raw/refs/heads/main/FEXCore/profile.json
           mv profile.json ./FEXCore_WCP
-          tar -I zstd -cvf FEXCore-Nightly.wcp FEXCore_WCP/
+          tar --zstd -cf FEXCore-Nightly.wcp ./FEXCore_WCP
           mv FEXCore-Nightly.wcp ./FEXCore_DLLs
 
       - name: Upload FEXCore_DLLs
