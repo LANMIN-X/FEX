@@ -24,7 +24,7 @@ jobs:
         run: |
           mkdir -p build/arm64ec && cd build/arm64ec
           ../../Data/nix/cmake_configure_woa64.sh ../../ -G Ninja
-          ninja
+          ninja && ls -R
           mkdir ../wow64 && cd ../wow64
           ../../Data/nix/cmake_configure_woa32.sh ../../ -G Ninja
-          ninja
+          ninja && ls -R
