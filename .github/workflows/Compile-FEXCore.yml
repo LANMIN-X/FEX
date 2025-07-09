@@ -41,7 +41,7 @@ jobs:
           wget https://github.com/TGP-17/wcp-template/raw/refs/heads/main/FEXCore/profile.json
           mv profile.json ./FEXCore_WCP
           tar -I zstd -cvf FEXCore-Nightly.wcp FEXCore_WCP/
-          mv FEXCore-Nightlx.wcp ./FEXCore_DLLs
+          mv FEXCore-Nightly.wcp ./FEXCore_DLLs
 
       - name: Upload FEXCore_DLLs
         uses: actions/upload-artifact@v4
