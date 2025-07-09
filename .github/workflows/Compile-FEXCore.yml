@@ -1,0 +1,30 @@
+name: Compile FEXCore
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  compile-fexcore:
+    runs-on: ubuntu-24.04-arm
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+         
+      - name: Install Nix Package Manager
+        uses: cachix/install-nix-action@v31
+        with:
+         nix_path: nixpkgs=channel:nixos-unstable
+        
+      - name: Compile FEXCore
+        run: |
+          mkdir -p build/arm64ec && cd build/arm64ec
+          ../../Data/nix/cmake_configure_woa64.sh ../../ -G Ninja
+          ninja
+          mkdir ../wow64 && cd ../wow64
+          ../../Data/nix/cmake_configure_woa32.sh ../../ -G Ninja
+          ninja
