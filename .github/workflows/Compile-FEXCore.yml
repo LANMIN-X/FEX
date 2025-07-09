@@ -32,7 +32,7 @@ jobs:
       - name: Package FEXCore DLLs
         run: |
           mkdir FEXCore_DLLs
-          cp -r ./build/arm64ec/Bin/libarm64ecfex.dll ./ FEXCore_DLLs
+          cp -r ./build/arm64ec/Bin/libarm64ecfex.dll ./FEXCore_DLLs
           cp -r ./build/wow64/Bin/libwow64fex.dll ./FEXCore_DLLs
 
 
