@@ -43,8 +43,8 @@ jobs:
           cd FEXCore_WCP
           TODAY=$(date +'%y%m%d')
           jq ".versionCode = $TODAY" profile.json > temp.json && mv temp.json profile.json
-          tar --zstd -cf FEXCore-Nightly.wcp profile.json system32
-          mv FEXCore-Nightly.wcp ../FEXCore_DLLs
+          tar --zstd -cf FEXCore-Nightly-$TODAY.wcp profile.json system32
+          mv FEXCore-Nightly-$TODAY.wcp ../FEXCore_DLLs
 
       - name: Upload FEXCore_DLLs
         uses: actions/upload-artifact@v4
