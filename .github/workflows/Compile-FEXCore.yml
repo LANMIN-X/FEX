@@ -41,6 +41,8 @@ jobs:
           wget https://github.com/TGP-17/wcp-template/raw/refs/heads/main/FEXCore/profile.json
           mv profile.json ./FEXCore_WCP
           cd FEXCore_WCP
+          TODAY=$(date +'%y%m%d')
+          jq ".versionCode = $TODAY" profile.json > temp.json && mv temp.json profile.json
           tar --zstd -cf FEXCore-Nightly.wcp profile.json system32
           mv FEXCore-Nightly.wcp ../FEXCore_DLLs
 
