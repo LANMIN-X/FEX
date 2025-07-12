@@ -51,3 +51,12 @@ jobs:
         with:
          name: FEXCore DLLs
          path: ./FEXCore_DLLs
+
+      - name: "Create Release"
+        if: github.event_name != 'pull_request'
+        uses: softprops/action-gh-release@v2
+        with:
+         name: "FEXCore-Nightly-$TODAY"
+         tag_name: $TODAY
+         prerelease: false
+         files: ./FEXCore_DLLs/FEXCore-Nightly-$TODAY.wcp ./FEXCore_DLLs/libarm64ecfex.dll ./FEXCore_DLLs/libwow64fex.dll
