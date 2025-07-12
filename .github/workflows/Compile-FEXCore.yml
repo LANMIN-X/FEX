@@ -29,6 +29,10 @@ jobs:
           ../../Data/nix/cmake_configure_woa32.sh ../../ -G Ninja
           ninja
 
+      - name: Set Date
+        id: set-date
+        run: echo "TODAY=$(date +'%y%m%d')" >> $GITHUB_OUTPUT
+  
       - name: Package FEXCore DLLs and WCP
         run: |
           mkdir FEXCore_DLLs
@@ -41,7 +45,6 @@ jobs:
           wget https://github.com/TGP-17/wcp-template/raw/refs/heads/main/FEXCore/profile.json
           mv profile.json ./FEXCore_WCP
           cd FEXCore_WCP
-          TODAY=$(date +'%y%m%d')
           jq ".versionCode = $TODAY" profile.json > temp.json && mv temp.json profile.json
           tar --zstd -cf FEXCore-Nightly-$TODAY.wcp profile.json system32
           mv FEXCore-Nightly-$TODAY.wcp ../FEXCore_DLLs
@@ -59,4 +62,4 @@ jobs:
          name: "FEXCore-Nightly-$TODAY"
          tag_name: $TODAY
          prerelease: false
-         files: ./FEXCore_DLLs/FEXCore-Nightly-$TODAY.wcp ./FEXCore_DLLs/libarm64ecfex.dll ./FEXCore_DLLs/libwow64fex.dll
+         files: ./FEXCore_DLLs/FEXCore-Nightly*.wcp ./FEXCore_DLLs/libarm64ecfex.dll ./FEXCore_DLLs/libwow64fex.dll
