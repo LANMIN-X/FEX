@@ -52,12 +52,16 @@ jobs:
          name: FEXCore DLLs
          path: ./FEXCore_DLLs
 
+      - name: "Set Date Variable"
+        id: date
+        run: echo "date=$(date +'%y%m%d')" >> $GITHUB_ENV
+
       - name: "Create Release"
         if: github.event_name != 'pull_request'
         uses: softprops/action-gh-release@v2
         with:
-         name: "FEXCore-Nightly-(date +'%y%m%d')"
-         tag_name: (date +'%y%m%d')
+         name: "FEXCore-Nightly-${{ env.date }}"
+         tag_name: "${{ env.date }}"
          prerelease: false
          files: |
           ./FEXCore_DLLs/FEXCore-Nightly*.wcp
