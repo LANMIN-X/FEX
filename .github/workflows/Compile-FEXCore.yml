@@ -59,4 +59,7 @@ jobs:
          name: "FEXCore-Nightly-(date +'%y%m%d')"
          tag_name: (date +'%y%m%d')
          prerelease: false
-         files: ./FEXCore_DLLs/FEXCore-Nightly*.wcp ./FEXCore_DLLs/libarm64ecfex.dll ./FEXCore_DLLs/libwow64fex.dll
+         files: |
+          ./FEXCore_DLLs/FEXCore-Nightly*.wcp
+          ./FEXCore_DLLs/libarm64ecfex.dll
+          ./FEXCore_DLLs/libwow64fex.dll
