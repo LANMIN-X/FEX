@@ -52,7 +52,6 @@ $end_info$
 #include <FEXCore/fextl/sstream.h>
 #include <FEXCore/fextl/vector.h>
 #include <FEXHeaderUtils/Syscalls.h>
-#include <FEXHeaderUtils/TodoDefines.h>
 
 #include <algorithm>
 #include <array>
@@ -405,7 +404,7 @@ void ContextImpl::ExecuteThread(FEXCore::Core::InternalThreadState* Thread) {
   }
 
   // If it is the parent thread that died then just leave
-  FEX_TODO("This doesn't make sense when the parent thread doesn't outlive its children");
+  // TODO: This doesn't make sense when the parent thread doesn't outlive its children
 }
 
 void ContextImpl::InitializeCompiler(FEXCore::Core::InternalThreadState* Thread) {
@@ -678,7 +677,11 @@ ContextImpl::GenerateIR(FEXCore::Core::InternalThreadState* Thread, uint64_t Gue
               LogMan::Msg::EFmt("Invalid or Unknown instruction: {} 0x{:x}", TableInfo->Name ?: "UND", Block.Entry - GuestRIP);
             }
 
-            Thread->OpDispatcher->InvalidOp(DecodedInfo);
+            if (Block.BlockStatus == Frontend::Decoder::DecodedBlockStatus::NOEXEC_INST) {
+              Thread->OpDispatcher->NoExecOp(DecodedInfo);
+            } else {
+              Thread->OpDispatcher->InvalidOp(DecodedInfo);
+            }
           }
 
           HadInvalidInst = true;

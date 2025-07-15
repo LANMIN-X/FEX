@@ -66,7 +66,7 @@ void OpDispatchBuilder::SyscallOp(OpcodeArgs, bool IsSyscallInst) {
     GPRIndexes = nullptr;
     DefaultSyscallFlags = FEXCore::IR::SyscallFlags::NORETURNEDRESULT;
   } else {
-    LogMan::Msg::DFmt("Unhandled OSABI syscall");
+    ERROR_AND_DIE_FMT("Unhandled OSABI syscall");
   }
 
   // Calculate flags early.
@@ -4682,8 +4682,7 @@ void OpDispatchBuilder::MemFenceOrXSAVEOPT(OpcodeArgs) {
     // 0xF0 is MFENCE
     _Fence(FEXCore::IR::Fence_LoadStore);
   } else {
-    LogMan::Msg::EFmt("Application tried using XSAVEOPT");
-    UnimplementedOp(Op);
+    XSaveOp(Op);
   }
 }
 
@@ -4810,6 +4809,15 @@ void OpDispatchBuilder::InvalidOp(OpcodeArgs) {
                 .Signal = SIGILL,
                 .TrapNumber = 0,
                 .si_code = 0,
+              });
+}
+
+void OpDispatchBuilder::NoExecOp(OpcodeArgs) {
+  BreakOp(Op, FEXCore::IR::BreakDefinition {
+                .ErrorRegister = 0,
+                .Signal = Core::FAULT_SIGSEGV,
+                .TrapNumber = 0,
+                .si_code = 2, // SEGV_ACCERR
               });
 }
 
