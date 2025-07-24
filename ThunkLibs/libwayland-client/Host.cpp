@@ -337,6 +337,8 @@ fexfn_impl_libwayland_client_wl_proxy_add_listener(struct wl_proxy* proxy, guest
       // E.g. xdg_toplevel::wm_capabilities
       FEX::HLE::FinalizeHostTrampolineForGuestFunction((FEX::HLE::HostToGuestTrampolinePtr*)callback,
                                                        (void*)CallGuestPtrWithWaylandArray<void, void*, wl_proxy*>);
+    } else if (signature == "f") {
+      WaylandFinalizeHostTrampolineForGuestListener<'f'>(callback);
     } else if (signature == "hu") {
       // E.g. zwp_linux_dmabuf_feedback_v1::format_table
       WaylandFinalizeHostTrampolineForGuestListener<'h', 'u'>(callback);
@@ -358,6 +360,8 @@ fexfn_impl_libwayland_client_wl_proxy_add_listener(struct wl_proxy* proxy, guest
       // E.g. xdg_toplevel::configure
       FEX::HLE::FinalizeHostTrampolineForGuestFunction((FEX::HLE::HostToGuestTrampolinePtr*)callback,
                                                        (void*)CallGuestPtrWithWaylandArray<void, void*, wl_proxy*, int32_t, int32_t>);
+    } else if (signature == "iiii") {
+      WaylandFinalizeHostTrampolineForGuestListener<'i', 'i', 'i', 'i'>(callback);
     } else if (signature == "iiiiissi") {
       // E.g. wl_output_listener::geometry
       WaylandFinalizeHostTrampolineForGuestListener<'i', 'i', 'i', 'i', 'i', 's', 's', 'i'>(callback);
@@ -402,6 +406,8 @@ fexfn_impl_libwayland_client_wl_proxy_add_listener(struct wl_proxy* proxy, guest
     } else if (signature == "uoffo") {
       // E.g. wl_data_device_listener::enter
       WaylandFinalizeHostTrampolineForGuestListener<'u', 'o', 'f', 'f', 'o'>(callback);
+    } else if (signature == "uoo") {
+      WaylandFinalizeHostTrampolineForGuestListener<'u', 'o', 'o'>(callback);
     } else if (signature == "us") {
       WaylandFinalizeHostTrampolineForGuestListener<'u', 's'>(callback);
     } else if (signature == "uss") {
@@ -479,13 +485,13 @@ void fexfn_impl_libwayland_client_fex_wl_exchange_interface_pointer(guest_layout
 
   // NOTE: These arrays are complements to global symbols in the guest, so we
   //       never explicitly free this memory
-  guest_interface.data.methods.data = (uintptr_t) new guest_layout<wl_message>[host_interface->method_count];
+  guest_interface.data.methods.data = (uintptr_t)new guest_layout<wl_message>[host_interface->method_count];
   for (int i = 0; i < host_interface->method_count; ++i) {
     guest_interface.data.methods.get_pointer()[i] = to_guest(to_host_layout(host_interface->methods[i]));
     guest_interface.data.methods.get_pointer()[i].data.types = to_guest(to_host_layout(host_interface->methods[i].types));
   }
 
-  guest_interface.data.events.data = (uintptr_t) new guest_layout<wl_message>[host_interface->event_count];
+  guest_interface.data.events.data = (uintptr_t)new guest_layout<wl_message>[host_interface->event_count];
   for (int i = 0; i < host_interface->event_count; ++i) {
     guest_interface.data.events.get_pointer()[i] = to_guest(to_host_layout(host_interface->events[i]));
     guest_interface.data.events.get_pointer()[i].data.types = to_guest(to_host_layout(host_interface->events[i].types));
