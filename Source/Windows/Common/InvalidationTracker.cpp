@@ -53,8 +53,9 @@ void InvalidationTracker::HandleMemoryProtectionNotification(uint64_t Address, u
   if (NeedsInvalidate) {
     // IntervalsLock cannot be held during invalidation
     std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
+    FEXCore::Context::InvalidatedEntryAccumulator Accumulator;
     for (auto Thread : Threads) {
-      CTX.InvalidateGuestCodeRange(Thread.second, AlignedBase, AlignedSize);
+      CTX.InvalidateGuestCodeRange(Thread.second, Accumulator, AlignedBase, AlignedSize);
     }
   }
 }
@@ -94,8 +95,9 @@ InvalidationTracker::InvalidateContainingSectionResult InvalidationTracker::Inva
   }
   {
     std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
+    FEXCore::Context::InvalidatedEntryAccumulator Accumulator;
     for (auto Thread : Threads) {
-      CTX.InvalidateGuestCodeRange(Thread.second, SectionBase, SectionSize);
+      CTX.InvalidateGuestCodeRange(Thread.second, Accumulator, SectionBase, SectionSize);
     }
   }
 
@@ -119,8 +121,9 @@ void InvalidationTracker::InvalidateAlignedInterval(uint64_t Address, uint64_t S
 
   {
     std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
+    FEXCore::Context::InvalidatedEntryAccumulator Accumulator;
     for (auto Thread : Threads) {
-      CTX.InvalidateGuestCodeRange(Thread.second, AlignedBase, AlignedSize);
+      CTX.InvalidateGuestCodeRange(Thread.second, Accumulator, AlignedBase, AlignedSize);
     }
   }
 
@@ -170,8 +173,9 @@ bool InvalidationTracker::HandleRWXAccessViolation(uint64_t FaultAddress) {
   if (NeedsInvalidate) {
     // IntervalsLock cannot be held during invalidation
     std::scoped_lock Lock(CTX.GetCodeInvalidationMutex());
+    FEXCore::Context::InvalidatedEntryAccumulator Accumulator;
     for (auto Thread : Threads) {
-      CTX.InvalidateGuestCodeRange(Thread.second, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
+      CTX.InvalidateGuestCodeRange(Thread.second, Accumulator, FaultAddress & FEXCore::Utils::FEX_PAGE_MASK, FEXCore::Utils::FEX_PAGE_SIZE);
     }
     return true;
   }
@@ -185,8 +189,10 @@ FEXCore::HLE::ExecutableRangeInfo InvalidationTracker::QueryExecutableRange(uint
     return {};
   }
   const auto RWXResult = RWXIntervals.Query(Address);
-  if (RWXResult.Enclosed || (RWXResult.Size && RWXResult.Size < XResult.Size)) {
-    return {RWXResult.Interval.Offset, RWXResult.Interval.End - RWXResult.Interval.Offset, RWXResult.Enclosed};
+  if (RWXResult.Enclosed) {
+    return {RWXResult.Interval.Offset, RWXResult.Interval.End - RWXResult.Interval.Offset, true};
+  } else if (RWXResult.Size && RWXResult.Size < XResult.Size) {
+    return {XResult.Interval.Offset, RWXResult.Interval.Offset - XResult.Interval.Offset, false};
   }
   return {XResult.Interval.Offset, XResult.Interval.End - XResult.Interval.Offset, false};
 }

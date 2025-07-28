@@ -27,6 +27,7 @@ $end_info$
 #include <FEXCore/Utils/SignalScopeGuards.h>
 
 #include "Common/ArgumentLoader.h"
+#include "Common/CallRetStack.h"
 #include "Common/Config.h"
 #include "Common/Exception.h"
 #include "Common/InvalidationTracker.h"
@@ -334,12 +335,8 @@ static bool HandleUnalignedAccess(ARM64_NT_CONTEXT& Context) {
   FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSIGBUSCount, 1);
   const auto Result =
     FEXCore::ArchHelpers::Arm64::HandleUnalignedAccess(Thread, HandlerConfig->GetUnalignedHandlerType(), Context.Pc, &Context.X0);
-  if (!Result.first) {
-    return false;
-  }
-
-  Context.Pc += Result.second;
-  return true;
+  Context.Pc += Result.value_or(0);
+  return Result.has_value();
 }
 
 static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, CONTEXT& Context) {
@@ -705,6 +702,10 @@ bool ResetToConsistentStateImpl(EXCEPTION_RECORD* Exception, CONTEXT* GuestConte
   if (Exception->ExceptionCode == EXCEPTION_ACCESS_VIOLATION) {
     const auto FaultAddress = static_cast<uint64_t>(Exception->ExceptionInformation[1]);
 
+    if (FEX::Windows::CallRetStack::HandleAccessViolation(Thread, FaultAddress, NativeContext->X17)) {
+      return true;
+    }
+
     std::scoped_lock Lock(ThreadCreationMutex);
     if (InvalidationTracker && InvalidationTracker->HandleRWXAccessViolation(FaultAddress)) {
       FEXCORE_PROFILE_INSTANT_INCREMENT(Thread, AccumulatedSMCCount, 1);
@@ -899,6 +900,8 @@ NTSTATUS ThreadInit() {
   const auto CPUArea = GetCPUArea();
 
   auto* Thread = CTX->CreateThread(0, 0);
+
+  FEX::Windows::CallRetStack::InitializeThread(Thread);
   Thread->CurrentFrame->Pointers.Common.ExitFunctionEC = reinterpret_cast<uintptr_t>(&ExitFunctionEC);
   CPUArea.StateFrame() = Thread->CurrentFrame;
 
@@ -957,6 +960,7 @@ NTSTATUS ThreadTerm(HANDLE Thread, LONG ExitCode) {
     }
   }
 
+  FEX::Windows::CallRetStack::DestroyThread(OldThreadState);
   CTX->DestroyThread(OldThreadState);
   ::VirtualFree(reinterpret_cast<void*>(CPUArea.EmulatorStackLimit()), 0, MEM_RELEASE);
   if (ThreadTID == GetCurrentThreadId()) {
