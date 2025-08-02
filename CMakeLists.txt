@@ -39,8 +39,14 @@ set (X86_32_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Data/CMake/toolchain_x86
 set (X86_64_TOOLCHAIN_FILE "${CMAKE_CURRENT_SOURCE_DIR}/Data/CMake/toolchain_x86_64.cmake" CACHE FILEPATH "Toolchain file for the (cross-)compiler targeting x86_64")
 set (X86_DEV_ROOTFS "/" CACHE FILEPATH "Path to the sysroot used for cross-compiling for i686 and x86_64")
 set (DATA_DIRECTORY "" CACHE PATH "Global data directory (override)")
+set (HOSTLIBS_DATA_DIRECTORY "" CACHE PATH "Global data directory (override)")
 if (NOT DATA_DIRECTORY)
   set (DATA_DIRECTORY "${CMAKE_INSTALL_PREFIX}/share/fex-emu")
+endif()
+
+include(GNUInstallDirs)
+if (NOT HOSTLIBS_DATA_DIRECTORY)
+  set(HOSTLIBS_DATA_DIRECTORY "${CMAKE_INSTALL_FULL_LIBDIR}/fex-emu")
 endif()
 
 string(FIND ${CMAKE_BASE_NAME} mingw CONTAINS_MINGW)
@@ -405,6 +411,13 @@ if (TUNE_CPU STREQUAL "native")
         OUTPUT_VARIABLE AARCH64_CPU)
 
       string(STRIP ${AARCH64_CPU} AARCH64_CPU)
+
+      execute_process(COMMAND python3 "${PROJECT_SOURCE_DIR}/Scripts/NeedDisabledSVE.py"
+        RESULT_VARIABLE NEEDS_SVE_DISABLED)
+      if (NEEDS_SVE_DISABLED)
+        message(STATUS "Platform has bugged SVE. Disabling")
+        set(AARCH64_CPU "cortex-a78")
+      endif()
 
       check_cxx_compiler_flag("-mcpu=${AARCH64_CPU}" COMPILER_SUPPORTS_CPU_TYPE)
       if(COMPILER_SUPPORTS_CPU_TYPE)

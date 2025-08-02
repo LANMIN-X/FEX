@@ -333,7 +333,7 @@ bool Decoder::NormalOp(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op,
   uint8_t DestSize {};
   const bool HasWideningDisplacement =
     (FEXCore::X86Tables::DecodeFlags::GetOpAddr(DecodeInst->Flags, 0) & FEXCore::X86Tables::DecodeFlags::FLAG_WIDENING_SIZE_LAST) != 0 ||
-    (Options.w && CTX->Config.Is64BitMode);
+    (Options.w && BlockInfo.Is64BitMode);
   const bool HasNarrowingDisplacement =
     (FEXCore::X86Tables::DecodeFlags::GetOpAddr(DecodeInst->Flags, 0) & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE_LAST) != 0;
 
@@ -351,7 +351,7 @@ bool Decoder::NormalOp(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op,
   const bool HasMODRM = !!(Info->Flags & FEXCore::X86Tables::InstFlags::FLAGS_MODRM);
 
   const bool HasREX = !!(DecodeInst->Flags & DecodeFlags::FLAG_REX_PREFIX);
-  const bool Has16BitAddressing = !CTX->Config.Is64BitMode && DecodeInst->Flags & DecodeFlags::FLAG_ADDRESS_SIZE;
+  const bool Has16BitAddressing = !BlockInfo.Is64BitMode && DecodeInst->Flags & DecodeFlags::FLAG_ADDRESS_SIZE;
 
   if (Options.w && (Info->Flags & InstFlags::FLAGS_REX_W_0)) {
     return false;
@@ -412,7 +412,7 @@ bool Decoder::NormalOp(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op,
       // If the default operating mode is 32bit and we have the operand size flag then the operating size drops to 16bit
       DecodeInst->Flags |= DecodeFlags::GenSizeDstSize(DecodeFlags::SIZE_16BIT);
       DestSize = 2;
-    } else if ((HasXMMDst || HasMMDst || CTX->Config.Is64BitMode) &&
+    } else if ((HasXMMDst || HasMMDst || BlockInfo.Is64BitMode) &&
                (HasWideningDisplacement || DstSizeFlag == FEXCore::X86Tables::InstFlags::SIZE_64BIT ||
                 DstSizeFlag == FEXCore::X86Tables::InstFlags::SIZE_64BITDEF)) {
       DecodeInst->Flags |= DecodeFlags::GenSizeDstSize(DecodeFlags::SIZE_64BIT);
@@ -441,7 +441,7 @@ bool Decoder::NormalOp(const FEXCore::X86Tables::X86InstInfo* Info, uint16_t Op,
       // See table 1-2. Operand-Size Overrides for this decoding
       // If the default operating mode is 32bit and we have the operand size flag then the operating size drops to 16bit
       DecodeInst->Flags |= DecodeFlags::GenSizeSrcSize(DecodeFlags::SIZE_16BIT);
-    } else if ((HasXMMSrc || HasMMSrc || CTX->Config.Is64BitMode) &&
+    } else if ((HasXMMSrc || HasMMSrc || BlockInfo.Is64BitMode) &&
                (HasWideningDisplacement || SrcSizeFlag == FEXCore::X86Tables::InstFlags::SIZE_64BIT ||
                 SrcSizeFlag == FEXCore::X86Tables::InstFlags::SIZE_64BITDEF)) {
       DecodeInst->Flags |= DecodeFlags::GenSizeSrcSize(DecodeFlags::SIZE_64BIT);
@@ -711,7 +711,7 @@ bool Decoder::NormalOpHeader(const FEXCore::X86Tables::X86InstInfo* Info, uint16
     DecodedHeader options {};
 
     if ((Byte1 & 0b10000000) == 0) {
-      if (!CTX->Config.Is64BitMode) {
+      if (!BlockInfo.Is64BitMode) {
         return false;
       }
 
@@ -730,12 +730,12 @@ bool Decoder::NormalOpHeader(const FEXCore::X86Tables::X86InstInfo* Info, uint16
       options.w = (Byte2 & 0b10000000) != 0;
       options.L = (Byte2 & 0b100) != 0;
       if ((Byte1 & 0b01000000) == 0) {
-        if (!CTX->Config.Is64BitMode) {
+        if (!BlockInfo.Is64BitMode) {
           return false;
         }
         DecodeInst->Flags |= DecodeFlags::FLAG_REX_XGPR_X;
       }
-      if (CTX->Config.Is64BitMode && (Byte1 & 0b00100000) == 0) {
+      if (BlockInfo.Is64BitMode && (Byte1 & 0b00100000) == 0) {
         DecodeInst->Flags |= DecodeFlags::FLAG_REX_XGPR_B;
       }
       if (options.w) {
@@ -808,7 +808,7 @@ bool Decoder::DecodeInstructionImpl(uint64_t PC) {
           FEXCore::X86Tables::ModRMDecoded ModRM;
           ModRM.Hex = DecodeInst->ModRM;
 
-          const bool Has16BitAddressing = !CTX->Config.Is64BitMode && DecodeInst->Flags & DecodeFlags::FLAG_ADDRESS_SIZE;
+          const bool Has16BitAddressing = !BlockInfo.Is64BitMode && DecodeInst->Flags & DecodeFlags::FLAG_ADDRESS_SIZE;
 
           // All 3DNow! instructions have the second argument as the rm handler
           // We need to decode it upfront to get the displacement out of the way
@@ -917,28 +917,24 @@ bool Decoder::DecodeInstructionImpl(uint64_t PC) {
       DecodeInst->Flags |= DecodeFlags::FLAG_ADDRESS_SIZE;
       break;
     case 0x26: // ES legacy prefix
-      if (!CTX->Config.Is64BitMode) {
-        DecodeInst->Flags |= DecodeFlags::FLAG_ES_PREFIX;
+      if (!BlockInfo.Is64BitMode) {
+        DecodeInst->Flags = (DecodeInst->Flags & ~FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) | DecodeFlags::FLAG_ES_PREFIX;
       }
       break;
     case 0x2E: // CS legacy prefix
-      if (!CTX->Config.Is64BitMode) {
-        DecodeInst->Flags |= DecodeFlags::FLAG_CS_PREFIX;
+      if (!BlockInfo.Is64BitMode) {
+        DecodeInst->Flags = (DecodeInst->Flags & ~FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) | DecodeFlags::FLAG_CS_PREFIX;
       }
       break;
     case 0x36: // SS legacy prefix
-      if (!CTX->Config.Is64BitMode) {
-        DecodeInst->Flags |= DecodeFlags::FLAG_SS_PREFIX;
+      if (!BlockInfo.Is64BitMode) {
+        DecodeInst->Flags = (DecodeInst->Flags & ~FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) | DecodeFlags::FLAG_SS_PREFIX;
       }
       break;
     case 0x3E: // DS legacy prefix
-      // Annoyingly GCC generates NOP ops with these prefixes
-      // Just ignore them for now
-      // eg. 66 2e 0f 1f 84 00 00 00 00 00 nop    WORD PTR cs:[rax+rax*1+0x0]
-      if (!CTX->Config.Is64BitMode) {
-        DecodeInst->Flags |= DecodeFlags::FLAG_DS_PREFIX;
+      if (!BlockInfo.Is64BitMode) {
+        DecodeInst->Flags = (DecodeInst->Flags & ~FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) | DecodeFlags::FLAG_DS_PREFIX;
       }
-      break;
       break;
     case 0xF0: // LOCK prefix
       DecodeInst->Flags |= DecodeFlags::FLAG_LOCK;
@@ -952,19 +948,16 @@ bool Decoder::DecodeInstructionImpl(uint64_t PC) {
       DecodeInst->LastEscapePrefix = Op;
       break;
     case 0x64: // FS prefix
-      DecodeInst->Flags |= DecodeFlags::FLAG_FS_PREFIX;
+      DecodeInst->Flags = (DecodeInst->Flags & ~FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) | DecodeFlags::FLAG_FS_PREFIX;
       break;
     case 0x65: // GS prefix
-      DecodeInst->Flags |= DecodeFlags::FLAG_GS_PREFIX;
+      DecodeInst->Flags = (DecodeInst->Flags & ~FEXCore::X86Tables::DecodeFlags::FLAG_SEGMENTS) | DecodeFlags::FLAG_GS_PREFIX;
       break;
     default:
       [[likely]] { // Default base table
         auto Info = &FEXCore::X86Tables::BaseOps[Op];
 
         if (Info->Type == FEXCore::X86Tables::TYPE_REX_PREFIX) {
-          if (!CTX->Config.Is64BitMode) {
-            return false;
-          }
           DecodeInst->Flags |= DecodeFlags::FLAG_REX_PREFIX;
 
           // Widening displacement
@@ -1029,7 +1022,7 @@ void Decoder::BranchTargetInMultiblockRange() {
 
   // If the RIP setting is conditional AND within our symbol range then it can be considered for multiblock
   uint64_t TargetRIP = 0;
-  const auto GPRSize = CTX->GetGPROpSize();
+  const auto GPRSize = GetGPROpSize();
   bool Conditional = true;
   const auto InstEnd = DecodeInst->PC + DecodeInst->InstSize;
 
@@ -1045,7 +1038,7 @@ void Decoder::BranchTargetInMultiblockRange() {
   case 0x80 ... 0x8F: { // More conditional
     // Source is a literal
     // auto RIPOffset = LoadSource(Op, Op->Src[0], Op->Flags);
-    // auto RIPTargetConst = _Constant(Op->PC + Op->InstSize);
+    // auto RIPTargetConst = Constant(Op->PC + Op->InstSize);
     // Target offset is PC + InstSize + Literal
     TargetRIP = InstEnd + DecodeInst->Src[0].Literal();
     break;
@@ -1102,7 +1095,7 @@ bool Decoder::InstCanContinue() const {
   }
 
   uint64_t TargetRIP = 0;
-  const auto GPRSize = CTX->GetGPROpSize();
+  const auto GPRSize = GetGPROpSize();
 
   if (DecodeInst->OP == 0xE8) { // Call - immediate target
     const uint64_t NextRIP = DecodeInst->PC + DecodeInst->InstSize;
@@ -1194,7 +1187,7 @@ const uint8_t* Decoder::AdjustAddrForSpecialRegion(const uint8_t* _InstStream, u
   return _InstStream - EntryPoint + RIP;
 }
 
-void Decoder::DecodeInstructionsAtEntry(const uint8_t* _InstStream, uint64_t PC, uint64_t MaxInst) {
+void Decoder::DecodeInstructionsAtEntry(FEXCore::Core::InternalThreadState *Thread, const uint8_t* _InstStream, uint64_t PC, uint64_t MaxInst) {
   FEXCORE_PROFILE_SCOPED("DecodeInstructions");
   BlockInfo.TotalInstructionCount = 0;
   BlockInfo.Blocks.clear();
@@ -1204,6 +1197,11 @@ void Decoder::DecodeInstructionsAtEntry(const uint8_t* _InstStream, uint64_t PC,
   MaxCondBranchForward = 0;
   MaxCondBranchBackwards = ~0ULL;
   DecodedBuffer = PoolObject.ReownOrClaimBuffer();
+
+  // Decode operating mode from thread's CS segment.
+  const auto CSSegment = Thread->CurrentFrame->State.gdt[Thread->CurrentFrame->State.cs_idx >> 3];
+  BlockInfo.Is64BitMode = CSSegment.L == 1;
+  LOGMAN_THROW_A_FMT(BlockInfo.Is64BitMode == CTX->Config.Is64BitMode, "Expected operating mode to not change at runtime!");
 
   // XXX: Load symbol data
   SymbolAvailable = false;

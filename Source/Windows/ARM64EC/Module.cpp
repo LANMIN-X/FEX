@@ -18,6 +18,7 @@ $end_info$
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Threads.h>
 #include <FEXCore/Utils/Profiler.h>
+#include <FEXCore/Utils/SHMStats.h>
 #include <FEXCore/Utils/EnumOperators.h>
 #include <FEXCore/Utils/EnumUtils.h>
 #include <FEXCore/Utils/FPState.h>
@@ -40,7 +41,7 @@ $end_info$
 #include "Common/PortabilityInfo.h"
 #include "DummyHandlers.h"
 #include "BTInterface.h"
-#include "Windows/Common/Profiler.h"
+#include "Windows/Common/SHMStats.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -378,7 +379,8 @@ static void LoadStateFromECContext(FEXCore::Core::InternalThreadState* Thread, C
 
     // The TEB is the only populated GDT entry by default
     const auto TEB = reinterpret_cast<uint64_t>(NtCurrentTeb());
-    State.gdt[(Context.SegGs & 0xffff) >> 3].base = TEB;
+    State.SetGDTBase(&State.gdt[(Context.SegGs & 0xffff) >> 3], TEB);
+    State.SetGDTLimit(&State.gdt[(Context.SegGs & 0xffff) >> 3], 0xF'FFFFU);
     State.gs_cached = TEB;
     State.fs_cached = 0;
     State.es_cached = 0;
@@ -664,7 +666,7 @@ NTSTATUS ProcessInit() {
   FEX_CONFIG_OPT(StartupSleepProcName, STARTUPSLEEPPROCNAME);
 
   if (IsWine && ProfileStats()) {
-    StatAllocHandler = fextl::make_unique<FEX::Windows::StatAlloc>(FEXCore::Profiler::AppType::WIN_ARM64EC);
+    StatAllocHandler = fextl::make_unique<FEX::Windows::StatAlloc>(FEXCore::SHMStats::AppType::WIN_ARM64EC);
   }
 
   if (StartupSleep() && (StartupSleepProcName().empty() || ExecutablePath == StartupSleepProcName())) {
@@ -792,12 +794,15 @@ void NotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL 
     return;
   }
 
-  if (!After || Status) {
-    return;
+  if (!After) {
+    ThreadCreationMutex.lock();
+  } else {
+    if (!Status) {
+      std::scoped_lock Lock(ThreadCreationMutex);
+      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
+    }
+    ThreadCreationMutex.unlock();
   }
-
-  std::scoped_lock Lock(ThreadCreationMutex);
-  InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
 }
 
 void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NTSTATUS Status) {
@@ -805,15 +810,15 @@ void NotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, NT
     return;
   }
 
-  if (After) {
-    return;
-  }
-
-  std::scoped_lock Lock(ThreadCreationMutex);
-  if (FreeType & MEM_DECOMMIT) {
-    InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
-  } else if (FreeType & MEM_RELEASE) {
-    InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
+  if (!After) {
+    ThreadCreationMutex.lock();
+    if (FreeType & MEM_DECOMMIT) {
+      InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
+    } else if (FreeType & MEM_RELEASE) {
+      InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
+    }
+  } else {
+    ThreadCreationMutex.unlock();
   }
 }
 
@@ -822,12 +827,15 @@ void NotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, 
     return;
   }
 
-  if (!After || Status) {
-    return;
+  if (!After) {
+    ThreadCreationMutex.lock();
+  } else {
+    if (!Status) {
+      std::scoped_lock Lock(ThreadCreationMutex);
+      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
+    }
+    ThreadCreationMutex.unlock();
   }
-
-  std::scoped_lock Lock(ThreadCreationMutex);
-  InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
 }
 
 NTSTATUS NotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE_T Size, ULONG AllocType, ULONG Prot) {
@@ -849,15 +857,16 @@ void NotifyUnmapViewOfSection(void* Address, BOOL After, NTSTATUS Status) {
     return;
   }
 
-  if (After) {
-    return;
-  }
-
-  std::scoped_lock Lock(ThreadCreationMutex);
-  auto [Start, Size] = InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
-  if (Size) {
-    std::scoped_lock Lock(CTX->GetCodeInvalidationMutex());
-    CTX->RemoveForceTSOInformation(Start, Size);
+  if (!After) {
+    ThreadCreationMutex.lock();
+    std::scoped_lock Lock(ThreadCreationMutex);
+    auto [Start, Size] = InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
+    if (Size) {
+      std::scoped_lock Lock(CTX->GetCodeInvalidationMutex());
+      CTX->RemoveForceTSOInformation(Start, Size);
+    }
+  } else {
+    ThreadCreationMutex.unlock();
   }
 }
 

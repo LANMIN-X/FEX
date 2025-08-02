@@ -20,6 +20,7 @@ $end_info$
 #include <FEXCore/Utils/LogManager.h>
 #include <FEXCore/Utils/Threads.h>
 #include <FEXCore/Utils/Profiler.h>
+#include <FEXCore/Utils/SHMStats.h>
 #include <FEXCore/Utils/EnumOperators.h>
 #include <FEXCore/Utils/EnumUtils.h>
 #include <FEXCore/Utils/FPState.h>
@@ -40,7 +41,7 @@ $end_info$
 #include "Common/PortabilityInfo.h"
 #include "DummyHandlers.h"
 #include "BTInterface.h"
-#include "Windows/Common/Profiler.h"
+#include "Windows/Common/SHMStats.h"
 
 #include <cstdint>
 #include <type_traits>
@@ -188,7 +189,8 @@ void LoadStateFromWowContext(FEXCore::Core::InternalThreadState* Thread, uint64_
   State.gs_idx = Context->SegGs & 0xffff;
 
   // The TEB is the only populated GDT entry by default
-  State.gdt[(Context->SegFs & 0xffff) >> 3].base = WowTEB;
+  State.SetGDTBase(&State.gdt[(Context->SegFs & 0xffff) >> 3], WowTEB);
+  State.SetGDTLimit(&State.gdt[(Context->SegFs & 0xffff) >> 3], 0xF'FFFFU);
   State.fs_cached = WowTEB;
   State.es_cached = 0;
   State.cs_cached = 0;
@@ -539,7 +541,7 @@ void BTCpuProcessInit() {
   FEX_CONFIG_OPT(StartupSleepProcName, STARTUPSLEEPPROCNAME);
 
   if (IsWine && ProfileStats()) {
-    StatAllocHandler = fextl::make_unique<FEX::Windows::StatAlloc>(FEXCore::Profiler::AppType::WIN_WOW64);
+    StatAllocHandler = fextl::make_unique<FEX::Windows::StatAlloc>(FEXCore::SHMStats::AppType::WIN_WOW64);
   }
 
   if (StartupSleep() && (StartupSleepProcName().empty() || ExecutablePath == StartupSleepProcName())) {
@@ -654,11 +656,29 @@ NTSTATUS BTCpuSetContext(HANDLE Thread, HANDLE Process, void* Unknown, WOW64_CON
   return STATUS_SUCCESS;
 }
 
-void BTCpuSimulate() {
+// .seh_pushframe doesn't restore the frame pointer, so if when unwinding from RtlCaptureContext an operation is used
+// that sets SP from FP, the unwound SP value will be incorrect. Wrap RtlCaptureContext so the correct FP is immediately
+// restored from the stack to prevent this.
+__attribute__((naked)) void BTCpuSimulate() {
+  asm(".seh_proc BTCpuSimulate;"
+      "sub sp, sp, #0x390;"
+      ".seh_stackalloc 0x390;"
+      "stp x29, x30, [sp, #-0x10]!;"
+      ".seh_save_fplr_x 16;"
+      ".seh_endprologue;"
+      "add x0, sp, #0x10;"
+      "bl RtlCaptureContext;"
+      "add x0, sp, #0x10;"
+      "bl BTCpuSimulateImpl;"
+      "ldp x29, x30, [sp], 0x10;"
+      "add sp, sp, #0x390;"
+      "ret;"
+      ".seh_endproc;");
+}
+
+extern "C" void BTCpuSimulateImpl(CONTEXT *entry_context) {
   auto TLS = GetTLS();
-  CONTEXT entry_context;
-  RtlCaptureContext(&entry_context);
-  TLS.EntryContext() = &entry_context;
+  TLS.EntryContext() = entry_context;
   TLS.CachedCallRetSp() = TLS.ThreadState()->CurrentFrame->State.callret_sp;
 
   Context::LockJITContext();
@@ -847,30 +867,37 @@ void BTCpuNotifyMemoryDirty(void* Address, SIZE_T Size) {
 }
 
 void BTCpuNotifyMemoryAlloc(void* Address, SIZE_T Size, ULONG Type, ULONG Prot, BOOL After, ULONG Status) {
-  if (!After || Status) {
-    return;
+  if (!After) {
+    ThreadCreationMutex.lock();
+  } else {
+    if (!Status) {
+      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
+    }
+    ThreadCreationMutex.unlock();
   }
-  std::scoped_lock Lock(ThreadCreationMutex);
-  InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), Prot);
 }
 
 void BTCpuNotifyMemoryProtect(void* Address, SIZE_T Size, ULONG NewProt, BOOL After, ULONG Status) {
-  if (!After || Status) {
-    return;
+  if (!After) {
+    ThreadCreationMutex.lock();
+  } else {
+    if (!Status) {
+      InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
+    }
+    ThreadCreationMutex.unlock();
   }
-  std::scoped_lock Lock(ThreadCreationMutex);
-  InvalidationTracker->HandleMemoryProtectionNotification(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), NewProt);
 }
 
 void BTCpuNotifyMemoryFree(void* Address, SIZE_T Size, ULONG FreeType, BOOL After, ULONG Status) {
-  if (After) {
-    return;
-  }
-  std::scoped_lock Lock(ThreadCreationMutex);
-  if (!Size) {
-    InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
-  } else if (FreeType & MEM_DECOMMIT) {
-    InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
+  if (!After) {
+    ThreadCreationMutex.lock();
+    if (!Size) {
+      InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
+    } else if (FreeType & MEM_DECOMMIT) {
+      InvalidationTracker->InvalidateAlignedInterval(reinterpret_cast<uint64_t>(Address), static_cast<uint64_t>(Size), true);
+    }
+  } else {
+    ThreadCreationMutex.unlock();
   }
 }
 
@@ -881,12 +908,12 @@ NTSTATUS BTCpuNotifyMapViewOfSection(void* Unk1, void* Address, void* Unk2, SIZE
 }
 
 void BTCpuNotifyUnmapViewOfSection(void* Address, BOOL After, ULONG Status) {
-  if (After) {
-    return;
+  if (!After) {
+    ThreadCreationMutex.lock();
+    InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
+  } else {
+    ThreadCreationMutex.unlock();
   }
-
-  std::scoped_lock Lock(ThreadCreationMutex);
-  InvalidationTracker->InvalidateContainingSection(reinterpret_cast<uint64_t>(Address), true);
 }
 
 void BTCpuNotifyReadFile(HANDLE Handle, void* Address, SIZE_T Size, BOOL After, NTSTATUS Status) {}

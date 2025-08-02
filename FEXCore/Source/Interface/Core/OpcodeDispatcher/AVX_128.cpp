@@ -778,7 +778,7 @@ void OpDispatchBuilder::AVX128_VectorXOR(OpcodeArgs) {
 void OpDispatchBuilder::AVX128_VZERO(OpcodeArgs) {
   const auto DstSize = GetDstSize(Op);
   const auto IsVZEROALL = DstSize == Core::CPUState::XMM_AVX_REG_SIZE;
-  const auto NumRegs = CTX->Config.Is64BitMode ? 16U : 8U;
+  const auto NumRegs = Is64BitMode ? 16U : 8U;
 
   if (IsVZEROALL) {
     // NOTE: Despite the name being VZEROALL, this will still only ever
@@ -968,7 +968,7 @@ void OpDispatchBuilder::AVX128_VBROADCAST(OpcodeArgs) {
     }
   } else {
     // Get the address to broadcast from into a GPR.
-    Ref Address = MakeSegmentAddress(Op, Op->Src[0], CTX->GetGPROpSize());
+    Ref Address = MakeSegmentAddress(Op, Op->Src[0], GetGPROpSize());
     Src.Low = _VBroadcastFromMem(OpSize::i128Bit, ElementSize, Address);
   }
 
@@ -1022,7 +1022,7 @@ void OpDispatchBuilder::AVX128_InsertCVTGPR_To_FPR(OpcodeArgs) {
 
   if (Op->Src[1].IsGPR()) {
     // If the source is a GPR then convert directly from the GPR.
-    auto Src2 = LoadSource_WithOpSize(GPRClass, Op, Op->Src[1], CTX->GetGPROpSize(), Op->Flags);
+    auto Src2 = LoadSource_WithOpSize(GPRClass, Op, Op->Src[1], GetGPROpSize(), Op->Flags);
     Result.Low = _VSToFGPRInsert(OpSize::i128Bit, DstElementSize, SrcSize, Src1.Low, Src2, false);
   } else if (SrcSize != DstElementSize) {
     // If the source is from memory but the Source size and destination size aren't the same,
@@ -1179,7 +1179,7 @@ void OpDispatchBuilder::AVX128_MOVBetweenGPR_FPR(OpcodeArgs) {
     RefPair Result {};
     if (Op->Src[0].IsGPR()) {
       // Loading from GPR and moving to Vector.
-      Ref Src = LoadSource_WithOpSize(FPRClass, Op, Op->Src[0], CTX->GetGPROpSize(), Op->Flags);
+      Ref Src = LoadSource_WithOpSize(FPRClass, Op, Op->Src[0], GetGPROpSize(), Op->Flags);
       // zext to 128bit
       Result.Low = _VCastFromGPR(OpSize::i128Bit, OpSizeFromSrc(Op), Src);
     } else {
@@ -1227,7 +1227,7 @@ void OpDispatchBuilder::AVX128_PExtr(OpcodeArgs) {
   Index &= NumElements - 1;
 
   if (Op->Dest.IsGPR()) {
-    const auto GPRSize = CTX->GetGPROpSize();
+    const auto GPRSize = GetGPROpSize();
     // Extract already zero extends the result.
     Ref Result = _VExtractToGPR(OpSize::i128Bit, OverridenElementSize, Src.Low, Index);
     StoreResult_WithOpSize(GPRClass, Op, Op->Dest, Result, GPRSize, OpSize::iInvalid);
@@ -1309,7 +1309,7 @@ void OpDispatchBuilder::AVX128_MOVMSK(OpcodeArgs) {
     // Inserting the full lower 32-bits offset 31 so the sign bit ends up at offset 63.
     GPR = _Bfi(OpSize::i64Bit, 32, 31, GPR, GPR);
     // Shift right to only get the two sign bits we care about.
-    return _Lshr(OpSize::i64Bit, GPR, _Constant(62));
+    return _Lshr(OpSize::i64Bit, GPR, Constant(62));
   };
 
   auto Mask4Byte = [this](Ref Src) {
@@ -1341,7 +1341,7 @@ void OpDispatchBuilder::AVX128_MOVMSK(OpcodeArgs) {
     auto GPRHigh = Mask8Byte(Src.High);
     GPR = _Orlshl(OpSize::i64Bit, GPRLow, GPRHigh, 2);
   }
-  StoreResult_WithOpSize(GPRClass, Op, Op->Dest, GPR, CTX->GetGPROpSize(), OpSize::iInvalid);
+  StoreResult_WithOpSize(GPRClass, Op, Op->Dest, GPR, GetGPROpSize(), OpSize::iInvalid);
 }
 
 void OpDispatchBuilder::AVX128_MOVMSKB(OpcodeArgs) {
@@ -1383,7 +1383,7 @@ void OpDispatchBuilder::AVX128_PINSRImpl(OpcodeArgs, IR::OpSize ElementSize, con
 
   if (Src2Op.IsGPR()) {
     // If the source is a GPR then convert directly from the GPR.
-    auto Src2 = LoadSource_WithOpSize(GPRClass, Op, Src2Op, CTX->GetGPROpSize(), Op->Flags);
+    auto Src2 = LoadSource_WithOpSize(GPRClass, Op, Src2Op, GetGPROpSize(), Op->Flags);
     Result.Low = _VInsGPR(OpSize::i128Bit, ElementSize, Index, Src1.Low, Src2);
   } else {
     // If loading from memory then we only load the element size
@@ -2055,7 +2055,7 @@ void OpDispatchBuilder::AVX128_VMASKMOVImpl(OpcodeArgs, IR::OpSize ElementSize, 
   auto Mask = AVX128_LoadSource_WithOpSize(Op, MaskOp, Op->Flags, !Is128Bit);
 
   const auto MakeAddress = [this, Op](const X86Tables::DecodedOperand& Data) {
-    return MakeSegmentAddress(Op, Data, CTX->GetGPROpSize());
+    return MakeSegmentAddress(Op, Data, GetGPROpSize());
   };
 
   if (IsStore) {
@@ -2148,7 +2148,7 @@ void OpDispatchBuilder::AVX128_VectorVariableBlend(OpcodeArgs) {
 }
 
 void OpDispatchBuilder::AVX128_SaveAVXState(Ref MemBase) {
-  const auto NumRegs = CTX->Config.Is64BitMode ? 16U : 8U;
+  const auto NumRegs = Is64BitMode ? 16U : 8U;
 
   for (uint32_t i = 0; i < NumRegs; i += 2) {
     RefPair Pair = LoadContextPair(OpSize::i128Bit, AVXHigh0Index + i);
@@ -2157,7 +2157,7 @@ void OpDispatchBuilder::AVX128_SaveAVXState(Ref MemBase) {
 }
 
 void OpDispatchBuilder::AVX128_RestoreAVXState(Ref MemBase) {
-  const auto NumRegs = CTX->Config.Is64BitMode ? 16U : 8U;
+  const auto NumRegs = Is64BitMode ? 16U : 8U;
 
   for (uint32_t i = 0; i < NumRegs; i += 2) {
     auto YMMHRegs = LoadMemPair(FPRClass, OpSize::i128Bit, MemBase, i * 16 + 576);
@@ -2168,7 +2168,7 @@ void OpDispatchBuilder::AVX128_RestoreAVXState(Ref MemBase) {
 }
 
 void OpDispatchBuilder::AVX128_DefaultAVXState() {
-  const auto NumRegs = CTX->Config.Is64BitMode ? 16U : 8U;
+  const auto NumRegs = Is64BitMode ? 16U : 8U;
 
   auto ZeroRegister = LoadZeroVector(OpSize::i128Bit);
   for (uint32_t i = 0; i < NumRegs; i++) {
@@ -2212,8 +2212,8 @@ void OpDispatchBuilder::AVX128_VTESTP(OpcodeArgs) {
   // For 256-bit, we need to split up the operation. This is nontrivial.
   // Let's go the simple route here.
   Ref ZF, CFInv;
-  Ref ZeroConst = _Constant(0);
-  Ref OneConst = _Constant(1);
+  Ref ZeroConst = Constant(0);
+  Ref OneConst = Constant(1);
 
   const auto ElementSizeInBits = IR::OpSizeAsBits(ElementSize);
 
@@ -2294,8 +2294,8 @@ void OpDispatchBuilder::AVX128_PTest(OpcodeArgs) {
   Test1 = _VExtractToGPR(OpSize::i128Bit, OpSize::i16Bit, Test1, 0);
   Test2 = _VExtractToGPR(OpSize::i128Bit, OpSize::i16Bit, Test2, 0);
 
-  auto ZeroConst = _Constant(0);
-  auto OneConst = _Constant(1);
+  auto ZeroConst = Constant(0);
+  auto OneConst = Constant(1);
 
   Test2 = _Select(FEXCore::IR::COND_NEQ, Test2, ZeroConst, OneConst, ZeroConst);
 
@@ -2328,7 +2328,7 @@ void OpDispatchBuilder::AVX128_VPERMD(OpcodeArgs) {
   RefPair Result {};
 
   Ref IndexMask = _VectorImm(OpSize::i128Bit, OpSize::i32Bit, 0b111);
-  Ref AddConst = _Constant(0x03020100);
+  Ref AddConst = Constant(0x03020100);
   Ref Repeating3210 = _VDupFromGPR(OpSize::i128Bit, OpSize::i32Bit, AddConst);
 
   Result.Low = DoPerm(Src, Indices.Low, IndexMask, Repeating3210);
@@ -2518,9 +2518,9 @@ OpDispatchBuilder::RefPair OpDispatchBuilder::AVX128_VPGatherImpl(OpSize Size, O
   ///< BaseAddr doesn't need to exist, calculate that here.
   Ref BaseAddr = VSIB.BaseAddr;
   if (BaseAddr && VSIB.Displacement) {
-    BaseAddr = _Add(OpSize::i64Bit, BaseAddr, _Constant(VSIB.Displacement));
+    BaseAddr = _Add(OpSize::i64Bit, BaseAddr, Constant(VSIB.Displacement));
   } else if (VSIB.Displacement) {
-    BaseAddr = _Constant(VSIB.Displacement);
+    BaseAddr = Constant(VSIB.Displacement);
   } else if (!BaseAddr) {
     BaseAddr = Invalid();
   }
@@ -2613,9 +2613,9 @@ OpDispatchBuilder::RefPair OpDispatchBuilder::AVX128_VPGatherQPSImpl(Ref Dest, R
   ///< BaseAddr doesn't need to exist, calculate that here.
   Ref BaseAddr = VSIB.BaseAddr;
   if (BaseAddr && VSIB.Displacement) {
-    BaseAddr = _Add(OpSize::i64Bit, BaseAddr, _Constant(VSIB.Displacement));
+    BaseAddr = _Add(OpSize::i64Bit, BaseAddr, Constant(VSIB.Displacement));
   } else if (VSIB.Displacement) {
-    BaseAddr = _Constant(VSIB.Displacement);
+    BaseAddr = Constant(VSIB.Displacement);
   } else if (!BaseAddr) {
     BaseAddr = Invalid();
   }

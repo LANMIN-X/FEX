@@ -198,7 +198,7 @@ public:
       auto it = JumpTargets.find(NextRIP);
       if (it == JumpTargets.end()) {
 
-        const auto GPRSize = CTX->GetGPROpSize();
+        const auto GPRSize = GetGPROpSize();
         // If we don't have a jump target to a new block then we have to leave
         // Set the RIP to the next instruction and leave
         auto RelocatedNextRIP = _EntrypointOffset(GPRSize, NextRIP - Entry);
@@ -242,7 +242,7 @@ public:
   template<typename F>
   void ForeachDirection(F&& Routine) {
     // Otherwise, prepare to branch.
-    auto Zero = _Constant(0);
+    auto Zero = Constant(0);
 
     // If the shift is zero, do not touch the flags.
     auto ForwardBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
@@ -300,7 +300,7 @@ public:
     return ShouldDump;
   }
 
-  void BeginFunction(uint64_t RIP, const fextl::vector<FEXCore::Frontend::Decoder::DecodedBlocks>* Blocks, uint32_t NumInstructions);
+  void BeginFunction(uint64_t RIP, const fextl::vector<FEXCore::Frontend::Decoder::DecodedBlocks>* Blocks, uint32_t NumInstructions, bool Is64BitMode);
   void Finalize();
 
   // Dispatch builder functions
@@ -712,7 +712,7 @@ public:
   Ref ReconstructX87StateFromFSW_Helper(Ref FSW);
   void FLD(OpcodeArgs, IR::OpSize Width);
   void FLDFromStack(OpcodeArgs);
-  void FLD_Const(OpcodeArgs, NamedVectorConstant Constant);
+  void FLD_Const(OpcodeArgs, NamedVectorConstant K);
 
   void FBLD(OpcodeArgs);
   void FBSTP(OpcodeArgs);
@@ -1197,7 +1197,7 @@ public:
 
     CalculateDeferredFlags();
 
-    const auto GPRSize = CTX->GetGPROpSize();
+    const auto GPRSize = GetGPROpSize();
     const auto VectorSize = GetGuestVectorLength();
 
     // Write backwards. This is a heuristic to improve coalescing, since we
@@ -1257,7 +1257,7 @@ public:
           _StoreContext(Size, Class, Value, Offset);
           // If Partial and MMX register, then we need to store all 1s in bits 64-80
           if (Partial && Index >= MM0Index && Index <= MM7Index) {
-            _StoreContext(OpSize::i16Bit, IR::GPRClass, _Constant(0xFFFF), Offset + 8);
+            _StoreContext(OpSize::i16Bit, IR::GPRClass, Constant(0xFFFF), Offset + 8);
           }
         }
       }
@@ -1268,6 +1268,10 @@ public:
     RegCache.Written &= ~Mask;
     RegCache.Cached &= ~Mask;
     RegCache.Partial &= ~Mask;
+  }
+
+  IR::OpSize GetGPROpSize() const {
+    return Is64BitMode ? IR::OpSize::i64Bit : IR::OpSize::i32Bit;
   }
 
 protected:
@@ -1509,7 +1513,7 @@ private:
 #undef OpcodeArgs
 
   Ref AppendSegmentOffset(Ref Value, uint32_t Flags, uint32_t DefaultPrefix = 0, bool Override = false);
-  Ref GetSegment(uint32_t Flags, uint32_t DefaultPrefix = 0, bool Override = false);
+  Ref GetSegment(uint32_t Flags, uint32_t DefaultPrefix = FEXCore::X86Tables::DecodeFlags::FLAG_NO_PREFIX, bool Override = false);
 
   void UpdatePrefixFromSegment(Ref Segment, uint32_t SegmentReg);
 
@@ -1633,7 +1637,7 @@ private:
   }
 
   void ZeroNZCV() {
-    CachedNZCV = _Constant(0);
+    CachedNZCV = Constant(0);
     NZCVDirty = true;
   }
 
@@ -1646,9 +1650,9 @@ private:
     // This is currently worse for 8/16-bit, but that should be optimized. TODO
     if (SrcSize >= OpSize::i32Bit) {
       if (SetPF) {
-        CalculatePF(_SubWithFlags(SrcSize, Res, _Constant(0)));
+        CalculatePF(_SubWithFlags(SrcSize, Res, Constant(0)));
       } else {
-        _SubNZCV(SrcSize, Res, _Constant(0));
+        _SubNZCV(SrcSize, Res, Constant(0));
       }
 
       CFInverted = true;
@@ -1719,7 +1723,7 @@ private:
       } else {
         // Invert as a GPR
         unsigned Bit = IndexNZCV(FEXCore::X86State::RFLAG_CF_RAW_LOC);
-        SetNZCV(_Xor(OpSize::i32Bit, GetNZCV(), _Constant(1u << Bit)));
+        SetNZCV(_Xor(OpSize::i32Bit, GetNZCV(), Constant(1u << Bit)));
         CalculateDeferredFlags();
       }
 
@@ -1757,7 +1761,7 @@ private:
     }
 
     HandleNZCVWrite();
-    _SubNZCV(OpSize::i32Bit, _Constant(0), Value);
+    _SubNZCV(OpSize::i32Bit, Constant(0), Value);
     CFInverted = true;
   }
 
@@ -1782,25 +1786,25 @@ private:
       StoreRegister(Core::CPUState::AF_AS_GREG, false, Value);
     } else if (BitOffset == FEXCore::X86State::RFLAG_DF_RAW_LOC) {
       // For DF, we need to transform 0/1 into 1/-1
-      StoreDF(_SubShift(OpSize::i64Bit, _Constant(1), Value, ShiftType::LSL, 1));
+      StoreDF(_SubShift(OpSize::i64Bit, Constant(1), Value, ShiftType::LSL, 1));
     } else if (BitOffset == FEXCore::X86State::RFLAG_TF_RAW_LOC) {
       auto PackedTF = _LoadContext(OpSize::i8Bit, GPRClass, offsetof(FEXCore::Core::CPUState, flags[BitOffset]));
       // An exception should still be raised after an instruction that unsets TF, leave the unblocked bit set but unset
       // the TF bit to cause such behaviour. The handling code at the start of the next block will then unset the
       // unblocked bit before raising the exception.
-      auto NewPackedTF = _Select(FEXCore::IR::COND_EQ, Value, _Constant(0), _And(OpSize::i32Bit, PackedTF, _Constant(~1)), _Constant(1));
+      auto NewPackedTF = _Select(FEXCore::IR::COND_EQ, Value, Constant(0), _And(OpSize::i32Bit, PackedTF, Constant(~1)), Constant(1));
       _StoreContext(OpSize::i8Bit, GPRClass, NewPackedTF, offsetof(FEXCore::Core::CPUState, flags[BitOffset]));
     } else {
       _StoreContext(OpSize::i8Bit, GPRClass, Value, offsetof(FEXCore::Core::CPUState, flags[BitOffset]));
     }
   }
 
-  void SetAF(unsigned Constant) {
+  void SetAF(unsigned K) {
     // AF is stored in bit 4 of the AF flag byte, with garbage in the other
     // bits. This allows us to defer the extract in the usual case. When it is
     // read, bit 4 is extracted.  In order to write a constant value of AF, that
     // means we need to left-shift here to compensate.
-    SetRFLAG<FEXCore::X86State::RFLAG_AF_RAW_LOC>(_Constant(Constant << 4));
+    SetRFLAG<FEXCore::X86State::RFLAG_AF_RAW_LOC>(Constant(K << 4));
   }
 
   void ZeroPF_AF();
@@ -1971,7 +1975,7 @@ private:
   }
 
   Ref LoadGPR(uint8_t Reg) {
-    return LoadRegCache(Reg, GPR0Index + Reg, GPRClass, CTX->GetGPROpSize());
+    return LoadRegCache(Reg, GPR0Index + Reg, GPRClass, GetGPROpSize());
   }
 
   Ref LoadContext(IR::OpSize Size, uint8_t Index) {
@@ -2025,14 +2029,14 @@ private:
         auto Value = _Bfe(OpSize::i32Bit, 1, IndexNZCV(BitOffset), GetNZCV());
 
         if (Invert) {
-          return _Xor(OpSize::i32Bit, Value, _Constant(1));
+          return _Xor(OpSize::i32Bit, Value, Constant(1));
         } else {
           return Value;
         }
       } else {
         // Because we explicitly inverted for CF above, we use the unsafe
         // _NZCVSelect rather than the safe CF-aware version.
-        return _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(BitOffset, Invert), _Constant(1), _Constant(0));
+        return _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(BitOffset, Invert), Constant(1), Constant(0));
       }
     } else if (BitOffset == FEXCore::X86State::RFLAG_PF_RAW_LOC) {
       return LoadGPR(Core::CPUState::PF_AS_GREG);
@@ -2040,7 +2044,7 @@ private:
       return LoadGPR(Core::CPUState::AF_AS_GREG);
     } else if (BitOffset == FEXCore::X86State::RFLAG_DF_RAW_LOC) {
       // Recover the sign bit, it is the logical DF value
-      return _Lshr(OpSize::i64Bit, LoadDF(), _Constant(63));
+      return _Lshr(OpSize::i64Bit, LoadDF(), Constant(63));
     } else {
       return _LoadContext(OpSize::i8Bit, GPRClass, offsetof(Core::CPUState, flags[BitOffset]));
     }
@@ -2112,7 +2116,7 @@ private:
       // Zero AF. Note that the comparison sets the raw PF to 0/1 above, so
       // PF[4] is 0 so the XOR with PF will have no effect, so setting the AF
       // byte to zero will indeed zero AF as intended.
-      SetRFLAG<FEXCore::X86State::RFLAG_AF_RAW_LOC>(_Constant(0));
+      SetRFLAG<FEXCore::X86State::RFLAG_AF_RAW_LOC>(Constant(0));
     }
 
     // Convert NZCV from the Arm representation to an eXternal representation
@@ -2129,7 +2133,7 @@ private:
   void ConvertNZCVToX87() {
     LOGMAN_THROW_A_FMT(NZCVDirty && CachedNZCV, "NZCV must be saved");
 
-    Ref V = _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(FEXCore::X86State::RFLAG_OF_RAW_LOC, false), _Constant(1), _Constant(0));
+    Ref V = _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(FEXCore::X86State::RFLAG_OF_RAW_LOC, false), Constant(1), Constant(0));
 
     if (CTX->HostFeatures.SupportsFlagM2) {
       // Convert to x86 flags, saves us from or'ing after.
@@ -2137,8 +2141,8 @@ private:
     }
 
     // CF is inverted after FCMP
-    Ref C = _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(FEXCore::X86State::RFLAG_CF_RAW_LOC, true), _Constant(1), _Constant(0));
-    Ref Z = _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(FEXCore::X86State::RFLAG_ZF_RAW_LOC, false), _Constant(1), _Constant(0));
+    Ref C = _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(FEXCore::X86State::RFLAG_CF_RAW_LOC, true), Constant(1), Constant(0));
+    Ref Z = _NZCVSelect(OpSize::i32Bit, CondForNZCVBit(FEXCore::X86State::RFLAG_ZF_RAW_LOC, false), Constant(1), Constant(0));
 
     if (!CTX->HostFeatures.SupportsFlagM2) {
       C = _Or(OpSize::i32Bit, C, V);
@@ -2146,7 +2150,7 @@ private:
     }
 
     SetRFLAG<FEXCore::X86State::X87FLAG_C0_LOC>(C);
-    SetRFLAG<FEXCore::X86State::X87FLAG_C1_LOC>(_Constant(0));
+    SetRFLAG<FEXCore::X86State::X87FLAG_C1_LOC>(Constant(0));
     SetRFLAG<FEXCore::X86State::X87FLAG_C2_LOC>(V);
     SetRFLAG<FEXCore::X86State::X87FLAG_C3_LOC>(Z);
   }
@@ -2196,9 +2200,9 @@ private:
       return CachedNamedVectorConstants[NamedConstant][log2_size_bytes];
     }
 
-    auto Constant = _LoadNamedVectorConstant(Size, NamedConstant);
-    CachedNamedVectorConstants[NamedConstant][log2_size_bytes] = Constant;
-    return Constant;
+    auto K = _LoadNamedVectorConstant(Size, NamedConstant);
+    CachedNamedVectorConstants[NamedConstant][log2_size_bytes] = K;
+    return K;
   }
   Ref LoadAndCacheIndexedNamedVectorConstant(IR::OpSize Size, FEXCore::IR::IndexNamedVectorConstant NamedIndexedConstant, uint32_t Index) {
     IndexNamedVectorMapKey Key {
@@ -2212,9 +2216,9 @@ private:
       return it->second;
     }
 
-    auto Constant = _LoadNamedVectorIndexedConstant(Size, NamedIndexedConstant, Index);
-    CachedIndexedNamedVectorConstants.insert_or_assign(Key, Constant);
-    return Constant;
+    auto K = _LoadNamedVectorIndexedConstant(Size, NamedIndexedConstant, Index);
+    CachedIndexedNamedVectorConstants.insert_or_assign(Key, K);
+    return K;
   }
 
   Ref LoadUncachedZeroVector(IR::OpSize Size) {
@@ -2232,7 +2236,7 @@ private:
     CachedIndexedNamedVectorConstants.clear();
   }
 
-  std::pair<bool, CondClassType> DecodeNZCVCondition(uint8_t OP);
+  std::optional<CondClassType> DecodeNZCVCondition(uint8_t OP);
   Ref SelectBit(Ref Cmp, IR::OpSize ResultSize, Ref TrueValue, Ref FalseValue);
   Ref SelectCC(uint8_t OP, IR::OpSize ResultSize, Ref TrueValue, Ref FalseValue);
 
@@ -2269,7 +2273,7 @@ private:
     }
 
     // Otherwise, prepare to branch.
-    auto Zero = _Constant(0);
+    auto Zero = Constant(0);
 
     // If the shift is zero, do not touch the flags.
     auto SetBlock = CreateNewCodeBlockAfter(GetCurrentBlock());
@@ -2345,8 +2349,8 @@ private:
   void ChgStateX87_MMX() override {
     LOGMAN_THROW_A_FMT(MMXState == MMXState_X87, "Expected state to be x87");
     _StackForceSlow();
-    SetX87Top(_Constant(0));                             // top reset to zero
-    StoreContext(AbridgedFTWIndex, _Constant(0xFFFFUL)); // all valid
+    SetX87Top(Constant(0));                             // top reset to zero
+    StoreContext(AbridgedFTWIndex, Constant(0xFFFFUL)); // all valid
     MMXState = MMXState_MMX;
   }
 
@@ -2371,6 +2375,7 @@ private:
   bool BlockSetRIP {false};
 
   bool Multiblock {};
+  bool Is64BitMode {};
   uint64_t Entry {};
   IROp_IRHeader* CurrentHeader {};
 
@@ -2405,7 +2410,7 @@ private:
 
   Ref _LoadMemAutoTSO(FEXCore::IR::RegisterClassType Class, IR::OpSize Size, AddressMode A, IR::OpSize Align = IR::OpSize::i8Bit) {
     bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
-    A = SelectAddressMode(this, A, CTX->GetGPROpSize(), CTX->HostFeatures.SupportsTSOImm9, AtomicTSO, Class != GPRClass, Size);
+    A = SelectAddressMode(this, A, GetGPROpSize(), CTX->HostFeatures.SupportsTSOImm9, AtomicTSO, Class != GPRClass, Size);
 
     if (AtomicTSO) {
       return _LoadMemTSO(Class, Size, A.Base, A.Index, Align, A.IndexType, A.IndexScale);
@@ -2425,7 +2430,7 @@ private:
       A.Offset = 0;
     }
 
-    Out.Base = LoadEffectiveAddress(this, A, CTX->GetGPROpSize(), true, false);
+    Out.Base = LoadEffectiveAddress(this, A, GetGPROpSize(), true, false);
     return Out;
   }
 
@@ -2456,7 +2461,7 @@ private:
 
   Ref _StoreMemAutoTSO(FEXCore::IR::RegisterClassType Class, IR::OpSize Size, AddressMode A, Ref Value, IR::OpSize Align = IR::OpSize::i8Bit) {
     bool AtomicTSO = IsTSOEnabled(Class) && !A.NonTSO;
-    A = SelectAddressMode(this, A, CTX->GetGPROpSize(), CTX->HostFeatures.SupportsTSOImm9, AtomicTSO, Class != GPRClass, Size);
+    A = SelectAddressMode(this, A, GetGPROpSize(), CTX->HostFeatures.SupportsTSOImm9, AtomicTSO, Class != GPRClass, Size);
 
     if (AtomicTSO) {
       return _StoreMemTSO(Class, Size, Value, A.Base, A.Index, Align, A.IndexType, A.IndexScale);
@@ -2507,7 +2512,7 @@ private:
 
   void Push(IR::OpSize Size, Ref Value) {
     auto OldSP = LoadGPRRegister(X86State::REG_RSP);
-    auto NewSP = _Push(CTX->GetGPROpSize(), Size, Value, OldSP);
+    auto NewSP = _Push(GetGPROpSize(), Size, Value, OldSP);
     StoreGPRRegister(X86State::REG_RSP, NewSP);
     FlushRegisterCache();
   }
@@ -2537,11 +2542,11 @@ private:
     }
 
     ArithRef And(uint64_t K) {
-      return IsConstant ? ArithRef(E, C & K) : ArithRef(E, E->_And(OpSize::i64Bit, R, E->_Constant(K)));
+      return IsConstant ? ArithRef(E, C & K) : ArithRef(E, E->_And(OpSize::i64Bit, R, E->Constant(K)));
     }
 
     ArithRef Presub(uint64_t K) {
-      return IsConstant ? ArithRef(E, K - C) : ArithRef(E, E->_Sub(OpSize::i64Bit, E->_Constant(K), R));
+      return IsConstant ? ArithRef(E, K - C) : ArithRef(E, E->_Sub(OpSize::i64Bit, E->Constant(K), R));
     }
 
     ArithRef Lshl(uint64_t Shift) {
@@ -2550,7 +2555,7 @@ private:
       } else if (IsConstant) {
         return ArithRef(E, C << Shift);
       } else {
-        return ArithRef(E, E->_Lshl(OpSize::i64Bit, R, E->_Constant(Shift)));
+        return ArithRef(E, E->_Lshl(OpSize::i64Bit, R, E->Constant(Shift)));
       }
     }
 
@@ -2590,7 +2595,7 @@ private:
       }
 
       if (IsConstant) {
-        return E->_Bfi(OpSize::i64Bit, Size, Start, Bitfield, E->_Constant(C));
+        return E->_Bfi(OpSize::i64Bit, Size, Start, Bitfield, E->Constant(C));
       } else {
         return E->_Bfi(OpSize::i64Bit, Size, Start, Bitfield, R);
       }
@@ -2606,12 +2611,12 @@ private:
 
         return ArithRef(E, Result);
       } else {
-        return ArithRef(E, E->_Lshl(Size, E->_Constant(1), R));
+        return ArithRef(E, E->_Lshl(Size, E->Constant(1), R));
       }
     }
 
     Ref Ref() {
-      return IsConstant ? E->_Constant(C) : R;
+      return IsConstant ? E->Constant(C) : R;
     }
 
     bool IsDefinitelyZero() const {

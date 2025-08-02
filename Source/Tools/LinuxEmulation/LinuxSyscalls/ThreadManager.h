@@ -8,7 +8,7 @@ $end_info$
 
 #pragma once
 
-#include "Common/Profiler.h"
+#include "Common/SHMStats.h"
 
 #include "LinuxSyscalls/Types.h"
 #include "LinuxSyscalls/Seccomp/SeccompEmulator.h"
@@ -92,9 +92,6 @@ struct ThreadStateObject : public FEXCore::Allocator::FEXAllocOperators {
   // GDB signal information
   struct GdbInfoStruct {
     int Signal {};
-    uint64_t SignalPC {};
-    uint64_t GPRs[32];
-    uint64_t PState {};
   };
   std::optional<GdbInfoStruct> GdbInfo;
 
@@ -123,7 +120,7 @@ public:
 
   ~ThreadManager();
 
-  class StatAlloc final : public FEX::Profiler::StatAllocBase {
+  class StatAlloc final : public FEX::SHMStats::StatAllocBase {
   public:
     StatAlloc();
 
@@ -132,8 +129,8 @@ public:
 
     void CleanupForExit();
 
-    FEXCore::Profiler::ThreadStats* AllocateSlot(uint32_t TID);
-    void DeallocateSlot(FEXCore::Profiler::ThreadStats* AllocatedSlot);
+    FEXCore::SHMStats::ThreadStats* AllocateSlot(uint32_t TID);
+    void DeallocateSlot(FEXCore::SHMStats::ThreadStats* AllocatedSlot);
 
   private:
     void Initialize();
