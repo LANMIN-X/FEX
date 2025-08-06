@@ -291,6 +291,14 @@
         "Desc": [
           "Implement a low power wait attempting to sleep until RDTSC >= Upper:Lower.",
           "Will spuriously wake up."
+	]
+      },
+      "MonoBackpatcherWrite OpSize:$Size, GPR:$Value, GPR:$Addr": {
+        "HasSideEffects": true,
+        "Desc": [ "Writes and invalidates the target address with the invalidation mutex locked. This is a fault-avoiding",
+                  "replacement for the atomic SMC writes used in the mono callsite backpatcher." ],
+        "EmitValidation": [
+          "Size == FEXCore::IR::OpSize::i32Bit || Size == FEXCore::IR::OpSize::i64Bit"
         ]
       }
     },
@@ -1304,6 +1312,13 @@
       "GPR = And OpSize:#Size, GPR:$Src1, GPR:$Src2": {
         "Desc": ["Integer binary and"
                 ],
+        "DestSize": "Size",
+        "EmitValidation": [
+          "Size == FEXCore::IR::OpSize::i32Bit || Size == FEXCore::IR::OpSize::i64Bit"
+        ]
+      },
+      "GPR = AndShift OpSize:#Size, GPR:$Src1, GPR:$Src2, ShiftType:$Shift{ShiftType::LSL}, u8:$ShiftAmount{0}": {
+        "Desc": [ "Integer binary and with shifted register"],
         "DestSize": "Size",
         "EmitValidation": [
           "Size == FEXCore::IR::OpSize::i32Bit || Size == FEXCore::IR::OpSize::i64Bit"
