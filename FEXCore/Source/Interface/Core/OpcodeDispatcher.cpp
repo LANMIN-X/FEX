@@ -498,15 +498,18 @@ void OpDispatchBuilder::POPSegmentOp(OpcodeArgs, uint32_t SegmentReg) {
 }
 
 void OpDispatchBuilder::LEAVEOp(OpcodeArgs) {
+  const auto GPRSize = GetGPROpSize();
+  const auto OperandSize = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE) ? OpSize::i16Bit : GPRSize;
+
   // First we move RBP in to RSP and then behave effectively like a pop
   auto SP = _RMWHandle(LoadGPRRegister(X86State::REG_RBP));
-  auto NewGPR = Pop(OpSizeFromSrc(Op), SP);
+  auto NewGPR = Pop(OperandSize, SP);
 
   // Store the new stack pointer
-  StoreGPRRegister(X86State::REG_RSP, SP);
+  StoreGPRRegister(X86State::REG_RSP, SP, OperandSize);
 
   // Store what we loaded to RBP
-  StoreGPRRegister(X86State::REG_RBP, NewGPR);
+  StoreGPRRegister(X86State::REG_RBP, NewGPR, OperandSize);
 }
 
 void OpDispatchBuilder::CALLOp(OpcodeArgs) {
@@ -523,8 +526,7 @@ void OpDispatchBuilder::CALLOp(OpcodeArgs) {
   // Call instruction only uses up to 32-bit signed displacement
   int64_t TargetOffset = Op->Src[0].Literal();
 
-  auto NewRIP = GetRelocatedPC(Op, TargetOffset);
-  auto ConstantPC = Sub(GPRSize, NewRIP, TargetOffset);
+  auto ConstantPC = GetRelocatedPC(Op);
 
   // Push the return address.
   Push(GPRSize, ConstantPC);
@@ -933,6 +935,81 @@ void OpDispatchBuilder::JUMPAbsoluteOp(OpcodeArgs) {
 
   // Store the new RIP
   ExitFunction(RIPOffset);
+}
+
+void OpDispatchBuilder::JUMPFARIndirectOp(OpcodeArgs) {
+  // Calculate flags early.
+  CalculateDeferredFlags();
+
+  BlockSetRIP = true;
+  // This is just an unconditional jump
+  // This uses ModRM to determine its location
+  // No way to use this effectively in multiblock
+  Ref Src = MakeSegmentAddress(Op, Op->Dest);
+  AddressMode SrcCS  = {.Base = Src, .Offset = 4, .AddrSize = OpSize::i64Bit};
+  auto RIPOffset = _LoadMemAutoTSO(GPRClass, OpSize::i32Bit, Src, OpSize::i8Bit);
+  auto NewSegmentCS = _LoadMemAutoTSO(GPRClass, OpSize::i16Bit, SrcCS, OpSize::i8Bit);
+
+  // Set up the new CSSegment.
+  _StoreContext(OpSize::i16Bit, GPRClass, NewSegmentCS, offsetof(FEXCore::Core::CPUState, cs_idx));
+  UpdatePrefixFromSegment(NewSegmentCS, FEXCore::X86Tables::DecodeFlags::FLAG_CS_PREFIX);
+
+  // Store the new RIP
+  ExitFunction(RIPOffset);
+}
+
+void OpDispatchBuilder::CALLFARIndirectOp(OpcodeArgs) {
+  const auto SrcSize = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REX_WIDENING ? OpSize::i64Bit : OpSize::i32Bit;
+
+  // Calculate flags early.
+  CalculateDeferredFlags();
+
+  BlockSetRIP = true;
+
+  Ref Src = MakeSegmentAddress(Op, Op->Dest);
+  AddressMode SrcCS  = {.Base = Src, .Offset = 4, .AddrSize = OpSize::i64Bit};
+  auto RIPOffset = _LoadMemAutoTSO(GPRClass, OpSize::i32Bit, Src, OpSize::i8Bit);
+  auto NewSegmentCS = _LoadMemAutoTSO(GPRClass, OpSize::i16Bit, SrcCS, OpSize::i8Bit);
+  auto CurrentCS = _LoadContext(OpSize::i16Bit, GPRClass, offsetof(FEXCore::Core::CPUState, cs_idx));
+
+  auto NewRIP = GetRelocatedPC(Op);
+
+  // Push the current CS
+  Push(SrcSize, CurrentCS);
+
+  // Push the return address.
+  Push(SrcSize, NewRIP);
+
+  // Set up the new CSSegment.
+  _StoreContext(OpSize::i16Bit, GPRClass, NewSegmentCS, offsetof(FEXCore::Core::CPUState, cs_idx));
+  UpdatePrefixFromSegment(NewSegmentCS, FEXCore::X86Tables::DecodeFlags::FLAG_CS_PREFIX);
+
+  // Store the new RIP
+  ExitFunction(RIPOffset);
+}
+
+void OpDispatchBuilder::RETFARIndirectOp(OpcodeArgs) {
+  const auto GPRSize = GetGPROpSize();
+  const auto SrcSize = Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_REX_WIDENING ? OpSize::i64Bit : OpSize::i32Bit;
+
+  Ref SP = _RMWHandle(LoadGPRRegister(X86State::REG_RSP));
+  Ref NewRIP = Pop(SrcSize, SP);
+  Ref NewSegmentCS = Pop(SrcSize, SP);
+
+  // Optional SP offset.
+  if (Op->Src[0].IsLiteral()) {
+    SP = Add(GPRSize, SP, Op->Src[0].Literal());
+  }
+
+  // Store the new stack pointer
+  StoreGPRRegister(X86State::REG_RSP, SP);
+
+  _StoreContext(OpSize::i16Bit, GPRClass, NewSegmentCS, offsetof(FEXCore::Core::CPUState, cs_idx));
+  UpdatePrefixFromSegment(NewSegmentCS, FEXCore::X86Tables::DecodeFlags::FLAG_CS_PREFIX);
+
+  // Store the new RIP
+  ExitFunction(NewRIP);
+  BlockSetRIP = true;
 }
 
 void OpDispatchBuilder::TESTOp(OpcodeArgs, uint32_t SrcIndex) {
@@ -2886,14 +2963,13 @@ void OpDispatchBuilder::WriteSegmentReg(OpcodeArgs, OpDispatchBuilder::Segment S
 
 void OpDispatchBuilder::EnterOp(OpcodeArgs) {
   const auto GPRSize = GetGPROpSize();
+  const auto OperandSize = (Op->Flags & FEXCore::X86Tables::DecodeFlags::FLAG_OPERAND_SIZE) ? OpSize::i16Bit : GPRSize;
   const uint64_t Value = Op->Src[0].Literal();
 
   const uint16_t AllocSpace = Value & 0xFFFF;
   const uint8_t Level = (Value >> 16) & 0x1F;
 
   const auto PushValue = [&](IR::OpSize Size, Ref Src) -> Ref {
-    const auto GPRSize = GetGPROpSize();
-
     auto OldSP = LoadGPRRegister(X86State::REG_RSP);
     auto NewSP = _Push(GPRSize, Size, Src, OldSP);
 
@@ -2903,16 +2979,16 @@ void OpDispatchBuilder::EnterOp(OpcodeArgs) {
   };
 
   auto OldBP = LoadGPRRegister(X86State::REG_RBP);
-  auto NewSP = PushValue(GPRSize, OldBP);
+  auto NewSP = PushValue(OperandSize, OldBP);
   auto temp_RBP = NewSP;
 
   if (Level > 0) {
     for (uint8_t i = 1; i < Level; ++i) {
-      auto MemLoc = Sub(GPRSize, OldBP, i * IR::OpSizeToSize(GPRSize));
-      auto Mem = _LoadMem(GPRClass, GPRSize, MemLoc, GPRSize);
-      NewSP = PushValue(GPRSize, Mem);
+      auto MemLoc = Sub(GPRSize, OldBP, i * IR::OpSizeToSize(OperandSize));
+      auto Mem = _LoadMem(GPRClass, OperandSize, MemLoc, OperandSize);
+      NewSP = PushValue(OperandSize, Mem);
     }
-    NewSP = PushValue(GPRSize, temp_RBP);
+    NewSP = PushValue(OperandSize, temp_RBP);
   }
   NewSP = Sub(GPRSize, NewSP, AllocSpace);
   StoreGPRRegister(X86State::REG_RSP, NewSP);
@@ -3731,7 +3807,11 @@ void OpDispatchBuilder::CMPXCHGOp(OpcodeArgs) {
     // Op1 = RAX == Op1 ? Op2 : Op1
     // If they match then set the rm operand to the input
     // else don't set the rm operand
-    Ref DestResult = Trivial ? Src2 : NZCVSelect(OpSize::i64Bit, CondClassType {COND_EQ}, Src2, Src1);
+    Ref Src2Lower = Src2;
+    if (GPRSize == OpSize::i64Bit && Size == OpSize::i32Bit) {
+      Src2Lower = _Bfe(GPRSize, IR::OpSizeAsBits(Size), 0, Src2);
+    }
+    Ref DestResult = Trivial ? Src2 : NZCVSelect(OpSize::i64Bit, CondClassType {COND_EQ}, Src2Lower, Src1);
 
     // Store in to GPR Dest
     if (GPRSize == OpSize::i64Bit && Size == OpSize::i32Bit) {
@@ -4032,8 +4112,11 @@ void OpDispatchBuilder::CheckLegacySegmentWrite(Ref NewNode, uint32_t SegmentReg
 void OpDispatchBuilder::UpdatePrefixFromSegment(Ref Segment, uint32_t SegmentReg) {
   // Use BFE to extract the selector index in bits [15,3] of the segment register.
   // In some cases the upper 16-bits of the 32-bit GPR contain garbage to ignore.
-  Segment = _Bfe(OpSize::i32Bit, 16 - 3, 3, Segment);
-  Ref NewSegment = _LoadContextIndexed(Segment, OpSize::i64Bit, offsetof(FEXCore::Core::CPUState, gdt[0]), 8, GPRClass);
+  auto GDT = _Bfe(OpSize::i32Bit, 1, 2, Segment);
+  // Fun quirk, if we mask the selector then it is premultiplied by 8 which we need to do for accessing anyway.
+  auto SegmentOffset = _And(OpSize::i32Bit, Segment, _Constant(0xfff8));
+  Ref SegmentBase = _LoadContextIndexed(GDT, OpSize::i64Bit, offsetof(FEXCore::Core::CPUState, segment_arrays[0]), 8, GPRClass);
+  Ref NewSegment = _LoadMem(GPRClass, OpSize::i64Bit, SegmentBase, SegmentOffset, OpSize::i8Bit, MEM_OFFSET_UXTW, 1);
   CheckLegacySegmentWrite(NewSegment, SegmentReg);
 
   // Extract the 32-bit base from the GDT segment.
@@ -5511,7 +5594,7 @@ void InstallOpcodeHandlers(Context::OperatingMode Mode) {
     {OPD(0xDB, 0xD0), 8, &OpDispatchBuilder::X87FCMOV},
     {OPD(0xDB, 0xD8), 8, &OpDispatchBuilder::X87FCMOV},
     // E0 = Invalid
-    {OPD(0xDB, 0xE2), 1, &OpDispatchBuilder::NOPOp}, // FNCLEX
+    {OPD(0xDB, 0xE2), 1, &OpDispatchBuilder::FNCLEX},
     {OPD(0xDB, 0xE3), 1, &OpDispatchBuilder::FNINIT},
     // E4 = Invalid
     {OPD(0xDB, 0xE8), 8,
@@ -5770,7 +5853,7 @@ void InstallOpcodeHandlers(Context::OperatingMode Mode) {
     {OPD(0xDB, 0xD0), 8, &OpDispatchBuilder::X87FCMOV},
     {OPD(0xDB, 0xD8), 8, &OpDispatchBuilder::X87FCMOV},
     // E0 = Invalid
-    {OPD(0xDB, 0xE2), 1, &OpDispatchBuilder::NOPOp}, // FNCLEX
+    {OPD(0xDB, 0xE2), 1, &OpDispatchBuilder::FNCLEX},
     {OPD(0xDB, 0xE3), 1, &OpDispatchBuilder::FNINIT},
     // E4 = Invalid
     {OPD(0xDB, 0xE8), 8,
